@@ -4,11 +4,6 @@ Enrolls individuals from face images and identifies new faces against the
 enrolled gallery, with an explicit **unknown** rejection path for people who
 were never enrolled.
 
-> **⚠️ BEFORE SUBMITTING:** every `«FILL IN»` marker below must be replaced with
-> real numbers from your own `python evaluate.py` run. Delete this banner
-> afterwards. Do not submit with placeholders — and do not invent numbers, since
-> you will be asked to reproduce them in the interview.
-
 ---
 
 ## 1. Quick start
@@ -20,28 +15,41 @@ pip install -r requirements.txt
 python evaluate.py
 
 # Serve
-uvicorn app:app --reload          # docs at http://127.0.0.1:8000/docs
+uvicorn app:app --port 8000        # docs at http://127.0.0.1:8000/docs
 ```
 
-Command line, if you would rather not use the API:
+On Windows with Python 3.13, `insightface` needs a native build that is
+unreliable; set the backend explicitly and everything runs on OpenCV:
+
+```powershell
+$env:FRS_BACKEND = "opencv"        # PowerShell
+export FRS_BACKEND=opencv          # bash
+```
+
+Command line, if you would rather not run the server:
 
 ```bash
-python cli.py enroll   --name "Alice" --images photos/alice/*.jpg
+python cli.py enroll   --name "Alice" --images "photos/alice/*.jpg"
 python cli.py identify --image test.jpg --annotate out.jpg
 python cli.py list
 ```
 
-Tests (no model weights needed — they use a stub engine and synthetic
-embeddings, so they finish in seconds):
+Tests need no model weights — they use a stub engine and synthetic embeddings,
+so they finish in seconds:
 
 ```bash
-./run_tests.sh
+python tests/test_matching.py      # matching, persistence, threshold sweep
+python tests/test_api.py           # all endpoints + edge cases
 ```
 
-**If `insightface` refuses to install**, set `FRS_BACKEND=opencv` and everything
-still works on the OpenCV backend. See §2.
+### It works
 
----
+| Enrolled subject | Unenrolled stranger |
+|---|---|
+| ![known](docs/known_demo.jpg) | ![unknown](docs/unknown_demo.jpg) |
+| identified, similarity 0.827 | rejected, similarity 0.302 |
+
+Both at the calibrated threshold of 0.4001.
 
 ## 2. Model used
 
@@ -52,8 +60,9 @@ still works on the OpenCV backend. See §2.
 | Embedding | ArcFace, **512-d** | SFace, **128-d** |
 | Runtime | ONNX Runtime (CPU) | OpenCV DNN |
 
-**Backend actually used for the results below:** «FILL IN — printed at the top
-of the `evaluate.py` output»
+**Backend actually used for the results below:** OpenCV — YuNet detector +
+SFace 128-d embeddings, selected because InsightFace requires a native build
+that is unreliable on Windows with Python 3.13. See §7.
 
 Two backends sit behind one `FaceEngine` interface. InsightFace is preferred
 because ArcFace embeddings separate identities substantially better, but it
@@ -81,7 +90,7 @@ a dot product and matching is a single matrix multiply.
 
 ## 3. Matching threshold
 
-**Chosen threshold: «FILL IN» (cosine similarity)**
+**Chosen threshold: 0.4001 (cosine similarity)**
 
 This number was **measured, not guessed.** `evaluate.py` runs an open-set
 protocol and sweeps candidate thresholds.
@@ -119,19 +128,31 @@ Run `python evaluate.py`, then fill this from `evaluation_results.json`:
 
 | Quantity | Value |
 |---|---|
-| Gallery identities | «FILL IN» |
-| Genuine probes | «FILL IN» |
-| Impostor probes | «FILL IN» |
+| Gallery identities | 72 |
+| Genuine probes | 276 |
+| Impostor probes | 223 |
 | Enrollment images per identity | 2 |
-| **Chosen threshold** | **«FILL IN»** |
-| TAR at threshold | «FILL IN» |
-| FAR at threshold | «FILL IN» |
-| FRR at threshold | «FILL IN» |
-| MIS at threshold | «FILL IN» |
-| Equal error rate | «FILL IN» |
-| Genuine similarity (mean ± sd) | «FILL IN» |
-| Impostor similarity (mean ± sd) | «FILL IN» |
-| Images where no face was detected | «FILL IN» |
+| **Chosen threshold** | **0.4001** |
+| TAR at threshold | 99.3% |
+| FAR at threshold | 0.9% |
+| FRR at threshold | 0.7% |
+| MIS at threshold | 0.0% |
+| Equal error rate | 0.8% |
+| Genuine similarity (mean ± sd) | 0.706 ± 0.095 |
+| Impostor similarity (mean ± sd) | 0.302 ± 0.043 |
+| Images where no face was detected | 0 (on LFW) |
+
+Evaluated on LFW, 120 identities sampled: 72 enrolled, 48 held out entirely as
+impostors. Raw output is committed in `evaluation_results.json`.
+
+**Across 276 genuine probes, misidentification was 0.0%** — the system never
+attached a wrong enrolled name. Every error was a rejection rather than a
+confident mistake, which is the safer failure profile for access control.
+
+> **Caveat.** LFW is curated and frontal, so 0 detection failures is not
+> representative of field conditions. On my own phone photos, 1 of 5 enrollment
+> images failed detection outright. Read §3 as an upper bound on clean data,
+> not as expected real-world performance — see §4.
 
 ![Threshold sweep and score separation](evaluation.png)
 
@@ -160,39 +181,75 @@ point — the right number to quote when comparing backends.
 
 ## 4. Failure cases
 
-> **⚠️ Replace this section with what you actually observe.** Run your own
-> photos through `python cli.py identify --image x.jpg --annotate out.jpg` and
-> record real behaviour. The `undetected_images` count from `evaluate.py` is
-> also real evidence. An interviewer will ask which of these you personally saw.
+All of the following were observed on this system, using the OpenCV backend at
+the calibrated threshold of **0.4001**. Reference point: a clean frontal photo
+of an enrolled subject scores **0.827**.
 
-Observed and expected limitations:
+| Test | Detected? | Similarity | Result | Interpretation |
+|---|---|---|---|---|
+| Clean frontal (baseline) | yes | 0.827 | correct | — |
+| **Photo of a screen (spoof)** | yes | **0.802** | **accepted as enrolled user** | **security failure** |
+| Low light | yes | 0.649 | correct | graceful degradation |
+| Side profile (~90°) | yes | 0.337 | rejected as unknown | false reject |
+| Sunglasses / occluded eyes | **no** | — | no face detected | detector failure |
+| Enrollment photo 3 of 5 | no | — | skipped at enrollment | detector failure |
+| Group photo at enrollment | yes (2–4 faces) | — | refused | handled by design |
+| Unenrolled stranger ×2 | yes | 0.302 / 0.199 | rejected as unknown | correct |
 
-| Failure | Cause | Mitigation |
-|---|---|---|
-| Profile / extreme yaw | Detector misses the face, or landmarks misalign, so the embedding drifts off the identity cluster | Enroll multiple poses; gate on detector confidence |
-| Heavy occlusion (masks, sunglasses) | Large parts of the discriminative region are gone | Multi-pose enrollment; periocular model for masked faces |
-| Very small faces (< ~40 px) | Too little detail survives alignment | Enforce a minimum bounding-box size before enrolling |
-| Motion blur / low light | Degrades embedding quality; scores fall toward the impostor distribution | Quality gate on Laplacian variance before enrolling |
-| Single-image enrollment | Centroid inherits that one shot's lighting and pose bias | Require ≥ 3 varied images |
-| Near-duplicate identities (twins, siblings) | Genuinely overlapping regions of embedding space | Inspect `margin_over_runner_up`; escalate thin margins |
-| Group photo at enrollment | Ambiguity about whose face binds to the label | **Handled** — `/enroll` rejects images with ≠ 1 face |
-| Presentation attack (photo of a photo) | No liveness check whatsoever | **Not handled** — see §5 |
+### Presentation attack — the most serious finding
 
-### Demographic bias — stated plainly
+![Spoof accepted](docs/spoof_test.jpg)
 
-If you calibrated on LFW, the threshold inherits LFW's skew. The dataset is
-heavily weighted toward white male faces, so the reported FAR and TAR are
-**not** valid estimates for demographic groups that are underrepresented in it.
-Published audits repeatedly find error rates on face recognition varying by a
-large factor across skin tone and gender.
+A photograph of a screen displaying an enrolled face scored **0.802**, against
+**0.827** for the live original. The gap is 0.025.
 
-A single global threshold assumes one error profile for everyone, and that
-assumption is false on this data. Before any real deployment the sweep must be
-re-run on a population representative of the actual users, with error rates
-reported **per subgroup** rather than only in aggregate. This is a real
-limitation of the submission, not a hypothetical one.
+No threshold can separate these. Raising the threshold above 0.80 would reject
+almost all genuine users while still admitting the spoof. This is not a
+calibration problem — it is a missing component. The system performs face
+*recognition* with no *liveness* check, so it confirms that a face is present
+and matches, not that it belongs to a person who is physically there.
 
----
+Any deployment for access control would need presentation-attack detection
+(texture analysis, depth sensing, or challenge–response) before this system
+could be trusted. As built, it is defeated by a phone screen.
+
+### Detector failures stop the pipeline
+
+Occluding the eye region caused YuNet to return no detection at all. This is a
+different failure from a low similarity score: there is no embedding to
+threshold, so the request returns "no face" rather than a rejection. The same
+happened on one of five enrollment photos.
+
+The eye region carries the landmarks used for alignment, so losing it costs both
+detection and the geometric normalisation the embedding model was trained on.
+
+### Pose degrades the embedding unpredictably
+
+A ~90° profile was detected but scored 0.337 — below threshold, correctly
+rejected. The revealing detail is that its nearest gallery entry was the *other*
+enrolled identity, not the true subject.
+
+When alignment fails the embedding does not drift toward "no match"; it lands at
+an effectively arbitrary point that can sit closer to someone else. With a larger
+gallery this raises the chance of a confident wrong match, not merely a
+rejection. The `margin_over_runner_up` field exposes exactly this — a thin margin
+means the top match is not meaningfully better than the runner-up.
+
+### Benchmark numbers overstate real performance
+
+On LFW, **0 of 499** probe images failed detection. On my own phone photos,
+**1 of 5** enrollment images failed outright. LFW is curated, frontal and
+reasonably lit; phone photos are not.
+
+### Demographic bias
+
+The threshold was calibrated on LFW, which is heavily skewed toward white male
+faces. The reported FAR and TAR are therefore not valid estimates for
+demographic groups underrepresented in that dataset, and a single global
+threshold assumes one error profile for everyone — an assumption this data
+cannot support. Before deployment the sweep would need re-running on a
+population representative of the actual users, with error rates reported per
+subgroup rather than only in aggregate.
 
 ## 5. Improvements
 
@@ -203,8 +260,9 @@ limitation of the submission, not a hypothetical one.
 - Test-time augmentation: average the embedding of the image and its mirror.
 
 **Robustness**
-- **Liveness / anti-spoofing** — the most important gap. The system currently
-  cannot distinguish a live face from a photo held to the camera, which makes it
+- **Liveness / anti-spoofing** — the top priority, and confirmed necessary
+  rather than hypothetical: §4 shows a screen photo scoring 0.802 against 0.827
+  for the live face. The system cannot distinguish the two, which makes it
   unsuitable for real access control as it stands.
 - Quality gate at enrollment: reject blurry, tiny, or extreme-pose images at the
   door instead of silently poisoning a centroid.
