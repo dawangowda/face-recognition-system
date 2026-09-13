@@ -1,0 +1,4 @@
+{
+  "threshold": 0.4001,
+  "backend": "opencv:YuNet + SFace"
+}

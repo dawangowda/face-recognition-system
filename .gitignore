@@ -1,0 +1,7 @@
+﻿__pycache__/
+*.pyc
+.venv/
+venv/
+*.npz
+myfaces/
+.DS_Store

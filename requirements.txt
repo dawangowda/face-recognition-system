@@ -1,0 +1,19 @@
+﻿# Core - this is everything needed to run the system
+numpy>=1.24
+opencv-python>=4.8          # YuNet detector + SFace recogniser ship inside this
+fastapi>=0.110
+uvicorn[standard]>=0.27
+python-multipart>=0.0.9     # required for multipart file uploads
+
+# Evaluation
+scikit-learn>=1.3           # LFW dataset fetcher
+matplotlib>=3.7             # evaluation curves
+
+# Observability (optional - /metrics degrades gracefully without it)
+prometheus-client>=0.20
+
+# Optional stronger backend: RetinaFace + ArcFace on ONNX Runtime.
+# Needs a native build and is unreliable on Windows / Python 3.13, so it is
+# left commented out. Uncomment and unset FRS_BACKEND to use it.
+# insightface>=0.7.3
+# onnxruntime>=1.16
